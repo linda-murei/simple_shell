@@ -1,24 +1,27 @@
 #ifndef SHELL_H
 #define SHELL_H
 
-/* Included headers */
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <signal.h>
-#include <string.h>
-#include <fcntl.h>
-#include <dirent.h>
+/**
+ * shell_read_line - Read a line of input from the user.
+ *
+ * Return: The input line as a string.
+ */
+char *shell_read_line(void);
 
-/* Function prototypes */
-void prompt(void);
-char *read_command(void);
-char **parse_command(char *command);
-int execute_command(char **args);
-int check_builtin(char **args);
-void handle_error(char *command, int status);
+/**
+ * shell_split_line - Split a line into tokens.
+ * @line: The input line to be tokenized.
+ *
+ * Return: An array of pointers to the tokens.
+ */
+char **shell_split_line(char *line);
+
+/**
+ * shell_execute - Execute the command and its arguments.
+ * @args: An array of pointers to the command and its arguments.
+ *
+ * Return: 1 if the shell should continue, 0 if the shell should exit.
+ */
+int shell_execute(char **args);
 
 #endif /* SHELL_H */
