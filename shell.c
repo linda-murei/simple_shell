@@ -1,209 +1,175 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <fcntl.h>
-#include <signal.h>
+#include "shell.h"
 
-#define MAX_BUFFER_SIZE 1024
-#define MAX_TOKENS 64
-#define DELIMITERS " \t\r\n\a"
+#define BUFFER_SIZE 1024
 
-/* Function Declarations */
-void handle_signal(int signo);
-char *read_input(void);
-char **split_input(char *input);
-int execute_command(char **args);
-int is_builtin(char *command);
-int handle_builtin(char **args);
-void handle_variables(char **args);
-void handle_comments(char *input);
-void free_args(char **args);
-
-/* Global Variable to keep track of program status */
-int exit_shell = 0;
-
-/* Main Shell Loop */
+/**
+ * main - Entry point of the shell
+ *
+ * Return: Always 0
+ */
 int main(void)
 {
-    char *input;
-    char **args;
-    int status;
+	char *command;
+	char **args;
+	int status;
 
-    signal(SIGINT, handle_signal);
+	while (1)
+	{
+		prompt();
+		command = read_command();
+		args = parse_command(command);
+		status = execute_command(args);
 
-    while (1)
-    {
-        printf("($) ");
-        input = read_input();
-        if (input == NULL)
-            break;
+		handle_error(args[0], status);
 
-        handle_comments(input);
-        args = split_input(input);
-        handle_variables(args);
+		free(command);
+		free(args);
+	}
 
-        status = execute_command(args);
-
-        free_args(args);
-        free(input);
-
-        if (exit_shell)
-            break;
-    }
-
-    return 0;
+	return (0);
 }
 
-/* Signal Handler for SIGINT */
-void handle_signal(int signo)
+/**
+ * prompt - Display the shell prompt
+ */
+void prompt(void)
 {
-    (void)signo;
-    putchar('\n');
-    printf("($) ");
-    fflush(stdout);
+	if (isatty(STDIN_FILENO))
+		printf("$ ");
 }
 
-/* Read user input from stdin */
-char *read_input(void)
+/**
+ * read_command - Read a command line from the user
+ *
+ * Return: The command line entered by the user
+ */
+char *read_command(void)
 {
-    char *buffer = malloc(MAX_BUFFER_SIZE);
-    if (!buffer)
-    {
-        perror("Error in memory allocation");
-        exit(EXIT_FAILURE);
-    }
+	char *buffer = NULL;
+	size_t bufsize = 0;
+	ssize_t bytesRead;
 
-    if (getline(&buffer, &MAX_BUFFER_SIZE, stdin) == -1)
-    {
-        free(buffer);
-        return NULL;
-    }
+	bytesRead = getline(&buffer, &bufsize, stdin);
+	if (bytesRead == -1)
+	{
+		if (isatty(STDIN_FILENO))
+			printf("\n");
+		free(buffer);
+		exit(EXIT_SUCCESS);
+	}
 
-    return buffer;
+	buffer[bytesRead - 1] = '\0'; /* Remove trailing newline */
+	return (buffer);
 }
 
-/* Split input into tokens */
-char **split_input(char *input)
+/**
+ * parse_command - Tokenize the command line into arguments
+ * @command: The command line string
+ *
+ * Return: An array of strings containing the arguments
+ */
+char **parse_command(char *command)
 {
-    char **tokens = malloc(MAX_TOKENS * sizeof(char *));
-    char *token;
-    int index = 0;
+	char **args = NULL;
+	char *token;
+	int i = 0;
 
-    if (!tokens)
-    {
-        perror("Error in memory allocation");
-        exit(EXIT_FAILURE);
-    }
+	args = malloc(sizeof(char *) * 2);
+	if (args == NULL)
+	{
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
 
-    token = strtok(input, DELIMITERS);
-    while (token != NULL)
-    {
-        tokens[index++] = token;
-        token = strtok(NULL, DELIMITERS);
-    }
+	token = strtok(command, " ");
+	while (token != NULL)
+	{
+		args[i] = token;
+		i++;
+		args = realloc(args, sizeof(char *) * (i + 1));
+		if (args == NULL)
+		{
+			perror("realloc");
+			exit(EXIT_FAILURE);
+		}
+		token = strtok(NULL, " ");
+	}
+	args[i] = NULL;
 
-    tokens[index] = NULL;
-    return tokens;
+	return (args);
 }
 
-/* Execute the given command with arguments */
+/**
+ * execute_command - Execute a command with arguments
+ * @args: An array of strings containing the command and arguments
+ *
+ * Return: The exit status of the command
+ */
 int execute_command(char **args)
 {
-    pid_t pid;
-    int status;
+	pid_t pid;
+	int status;
 
-    if (args[0] == NULL)
-        return 1;
+	if (check_builtin(args))
+		return (0);
 
-    if (is_builtin(args[0]))
-        return handle_builtin(args);
+	pid = fork();
+	if (pid == -1)
+	{
+		perror("fork");
+		exit(EXIT_FAILURE);
+	}
+	else if (pid == 0)
+	{
+		if (execve(args[0], args, NULL) == -1)
+		{
+			perror("execve");
+			exit(EXIT_FAILURE);
+		}
+	}
+	else
+	{
+		waitpid(pid, &status, 0);
+		return (status);
+	}
 
-    pid = fork();
-    if (pid == 0)
-    {
-        /* Child process */
-        if (execvp(args[0], args) == -1)
-        {
-            perror(args[0]);
-            exit(EXIT_FAILURE);
-        }
-    }
-    else if (pid < 0)
-    {
-        /* Forking error */
-        perror("Forking error");
-    }
-    else
-    {
-        /* Parent process */
-        do
-        {
-            waitpid(pid, &status, WUNTRACED);
-        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
-    }
-
-    return 1;
+	return (0);
 }
 
-/* Check if a command is a built-in command */
-int is_builtin(char *command)
+/**
+ * check_builtin - Check if the command is a built-in command
+ * @args: An array of strings containing the command and arguments
+ *
+ * Return: 1 if the command is a built-in, 0 otherwise
+ */
+int check_builtin(char **args)
 {
-    return (strcmp(command, "exit") == 0 || strcmp(command, "cd") == 0);
+	if (strcmp(args[0], "exit") == 0)
+		exit(EXIT_SUCCESS);
+	else if (strcmp(args[0], "env") == 0)
+	{
+		char *const env[] = {"env", NULL};
+
+		if (execve("/usr/bin/env", env, NULL) == -1)
+		{
+			perror("execve");
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	return (0);
 }
 
-/* Handle built-in commands */
-int handle_builtin(char **args)
+/**
+ * handle_error - Handle command not found errors
+ * @command: The command that was not found
+ * @status: The exit status of the command
+ */
+void handle_error(char *command, int status)
 {
-    if (strcmp(args[0], "exit") == 0)
-    {
-        exit_shell = 1;
-        return 1;
-    }
-
-    if (strcmp(args[0], "cd") == 0)
-    {
-        if (args[1] == NULL)
-        {
-            fprintf(stderr, "Usage: cd <directory>\n");
-        }
-        else
-        {
-            if (chdir(args[1]) != 0)
-                perror("cd");
-        }
-        return 1;
-    }
-
-    return 0; /* Not a built-in command */
-}
-
-/* Handle variable replacement (Not implemented in this example) */
-void handle_variables(char **args)
-{
-    (void)args;
-    // To be implemented, if desired.
-}
-
-/* Handle comments by removing them from the input */
-void handle_comments(char *input)
-{
-    char *comment_ptr = strchr(input, '#');
-    if (comment_ptr != NULL)
-        *comment_ptr = '\0';
-}
-
-/* Free memory allocated for arguments */
-void free_args(char **args)
-{
-    int i = 0;
-    while (args[i] != NULL)
-    {
-        free(args[i]);
-        i++;
-    }
-    free(args);
+	if (status == 127)
+	{
+		fprintf(stderr, "%s: command not found\n", command);
+		fflush(stderr);
+	}
 }
