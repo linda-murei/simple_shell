@@ -2,44 +2,51 @@
 
 #define BUFFER_SIZE 1024
 
-int main(void)
+/**
+ * main - Entry point of the shell
+ *
+ * Return: Always 0
+ */
+int main(int argc, char **argv, char **envp)
 {
-    char *command;
+    char *line;
     char **args;
     int status;
+
+    (void)argc;
+    (void)argv;
 
     while (1)
     {
         prompt();
-        command = read_command();
-        args = parse_command(command);
-
-        /* Check if the command is empty (user pressed enter)*/
-        if (args[0] == NULL)
-        {
-            free(command);
-            free(args);
-            continue;
-        }
-
-        status = execute_command(args);
+        line = read_line();
+        args = parse_line(line);
+        status = execute_command(args, envp);
 
         handle_error(args[0], status);
 
-        free(command);
+        free(line);
         free(args);
     }
 
     return 0;
 }
 
+/**
+ * prompt - Display the shell prompt
+ */
 void prompt(void)
 {
     if (isatty(STDIN_FILENO))
         printf("$ ");
 }
 
-char *read_command(void)
+/**
+ * read_line - Read a command line from the user
+ *
+ * Return: The command line entered by the user
+ */
+char *read_line(void)
 {
     char *buffer = NULL;
     size_t bufsize = 0;
@@ -58,44 +65,120 @@ char *read_command(void)
     return buffer;
 }
 
-char **parse_command(char *command)
+/**
+ * count_tokens - Count the number of tokens in a line using delimiters
+ * @line: The input line
+ * @delimiters: The delimiters used to split the line
+ *
+ * Return: The number of tokens
+ */
+int count_tokens(char *line, char *delimiters)
 {
-    char **args = NULL;
-    char *token;
-    int i = 0;
+    int count = 0;
+    char *copy, *token;
 
-    args = malloc(sizeof(char *));
-    if (args == NULL)
+    copy = strdup(line);
+    if (copy == NULL)
+    {
+        perror("strdup");
+        exit(EXIT_FAILURE);
+    }
+
+    token = strtok(copy, delimiters);
+    while (token != NULL)
+    {
+        count++;
+        token = strtok(NULL, delimiters);
+    }
+
+    free(copy);
+    return count;
+}
+
+/**
+ * split_tokens - Split the line into tokens using delimiters
+ * @line: The input line
+ * @delimiters: The delimiters used to split the line
+ *
+ * Return: An array of strings containing the tokens
+ */
+char **split_tokens(char *line, char *delimiters)
+{
+    char **tokens;
+    char *copy, *token;
+    int count, i = 0;
+
+    count = count_tokens(line, delimiters);
+    tokens = malloc(sizeof(char *) * (count + 1));
+    if (tokens == NULL)
     {
         perror("malloc");
         exit(EXIT_FAILURE);
     }
 
-    token = strtok(command, " ");
+    copy = strdup(line);
+    if (copy == NULL)
+    {
+        perror("strdup");
+        exit(EXIT_FAILURE);
+    }
+
+    token = strtok(copy, delimiters);
     while (token != NULL)
     {
-        args[i] = strdup(token); /* Use strdup to duplicate the token*/
+        tokens[i] = token;
         i++;
-        args = realloc(args, sizeof(char *) * (i + 1));
-        if (args == NULL)
-        {
-            perror("realloc");
-            exit(EXIT_FAILURE);
-        }
-        token = strtok(NULL, " ");
+        token = strtok(NULL, delimiters);
     }
-    args[i] = NULL;
+    tokens[i] = NULL;
 
+    free(copy);
+    return tokens;
+}
+
+/**
+ * parse_line - Tokenize the command line into arguments
+ * @line: The command line string
+ *
+ * Return: An array of strings containing the arguments
+ */
+char **parse_line(char *line)
+{
+    char **args;
+
+    args = split_tokens(line, " \t\r\n");
     return args;
 }
 
-int execute_command(char **args)
+
+
+/**
+ * execute_command - Execute a command with arguments
+ * @args: An array of strings containing the command and arguments
+ * @envp: The array of environment variables
+ *
+ * Return: The exit status of the command
+ */
+int execute_command(char **args, char **envp)
 {
     pid_t pid;
     int status;
+    char *path;
+    char *path_copy;
+    char *token;
 
-    if (check_builtin(args))
-        return 0;
+    int is_background = 0;
+
+    int num_args = 0;
+    while (args[num_args] != NULL)
+        num_args++;
+
+    if (num_args > 0 && strcmp(args[num_args - 1], "&") == 0)
+    {
+        args[num_args - 1] = NULL;
+        is_background = 1;
+    }
+
 
     pid = fork();
     if (pid == -1)
@@ -105,57 +188,96 @@ int execute_command(char **args)
     }
     else if (pid == 0)
     {
-        if (execvp(args[0], args) == -1)
+        if (args[0][0] == '/')
         {
-            perror("execvp");
+            if (execve(args[0], args, envp) == -1)
+            {
+                perror("execve");
+                exit(EXIT_FAILURE);
+            }
+        }
+        else
+        {
+            char *path_env = getenv("PATH");
+            path_copy = strdup(path_env);
+
+            if (path_copy == NULL)
+            {
+                perror("strdup");
+                exit(EXIT_FAILURE);
+            }
+
+            token = strtok(path_copy, ":"); /* Move the declaration to the beginning of the block*/
+            while (token != NULL)
+            {
+                path = malloc(strlen(token) + strlen(args[0]) + 2);
+                if (path == NULL)
+                {
+                    perror("malloc");
+                    exit(EXIT_FAILURE);
+                }
+                sprintf(path, "%s/%s", token, args[0]);
+
+                if (access(path, X_OK) == 0)
+                {
+                    if (execve(path, args, envp) == -1)
+                    {
+                        perror("execve");
+                        exit(EXIT_FAILURE);
+                    }
+                }
+
+                free(path);
+                token = strtok(NULL, ":");
+            }
+
+            fprintf(stderr, "%s: command not found\n", args[0]);
+            free(path_copy);
             exit(EXIT_FAILURE);
         }
     }
     else
     {
-        waitpid(pid, &status, 0);
+        if (!is_background)
+            waitpid(pid, &status, 0);
+
         return status;
     }
 
     return 0;
 }
 
-int check_builtin(char **args)
+/**
+ * check_builtin - Check if the command is a built-in command
+ * @args: An array of strings containing the command and arguments
+ * @envp: The array of environment variables
+ *
+ * Return: 1 if the command is a built-in, 0 otherwise
+ */
+int check_builtin(char **args, char **envp)
 {
+    if (args[0] == NULL)
+        return 1;
+
     if (strcmp(args[0], "exit") == 0)
-    {
-        handle_exit(args);
-        return 1;
-    }
+        return shell_exit(args);
     else if (strcmp(args[0], "env") == 0)
-    {
-        handle_env();
-        return 1;
-    }
-    else if (strcmp(args[0], "cd") == 0)
-    {
-        handle_cd(args);
-        return 1;
-    }
+        return shell_env(envp);
     else if (strcmp(args[0], "setenv") == 0)
-    {
-        handle_setenv(args);
-        return 1;
-    }
+        return shell_setenv(args, envp);
     else if (strcmp(args[0], "unsetenv") == 0)
-    {
-        handle_unsetenv(args);
-        return 1;
-    }
-    else if (strcmp(args[0], "alias") == 0)
-    {
-        handle_alias(args);
-        return 1;
-    }
+        return shell_unsetenv(args, envp);
+    else if (strcmp(args[0], "cd") == 0)
+        return shell_cd(args);
 
     return 0;
 }
 
+/**
+ * handle_error - Handle command not found errors
+ * @command: The command that was not found
+ * @status: The exit status of the command
+ */
 void handle_error(char *command, int status)
 {
     if (status == 127)
@@ -165,146 +287,107 @@ void handle_error(char *command, int status)
     }
 }
 
-void handle_exit(char **args)
+/**
+ * shell_exit - Handle the exit built-in command
+ * @args: An array of strings containing the command and arguments
+ *
+ * Return: 1 to exit the shell
+ */
+int shell_exit(char **args)
 {
-    /* If there's an argument, attempt to convert it to an integer*/
+    int status = 0;
+
     if (args[1] != NULL)
     {
-        int exit_status = atoi(args[1]);
-        exit(exit_status);
+        status = atoi(args[1]);
+        if (status == 0 && args[1][0] != '0')
+            status = 255;
     }
-    else
-    {
-        exit(EXIT_SUCCESS);
-    }
+
+    exit(status);
 }
 
-void handle_env(void)
+/**
+ * shell_env - Handle the env built-in command
+ * @envp: The array of environment variables
+ *
+ * Return: 0 to continue the shell
+ */
+int shell_env(char **envp)
 {
-    extern char **environ;
-    char **env;
-    for (env = environ; *env != NULL; env++)
+    int i = 0;
+
+    while (envp[i] != NULL)
     {
-        printf("%s\n", *env);
+        printf("%s\n", envp[i]);
+        i++;
     }
+
+    return 0;
 }
 
-void handle_cd(char **args)
+/**
+ * shell_setenv - Handle the setenv built-in command
+ * @args: An array of strings containing the command and arguments
+ * @envp: The array of environment variables
+ *
+ * Return: 0 to continue the shell
+ */
+int shell_setenv(char **args, char **envp)
 {
-    char *dir = args[1];
+    (void)envp;
 
-    if (dir == NULL)
-        dir = getenv("HOME");
-
-    if (dir == NULL)
+    if (args[1] == NULL || args[2] == NULL)
     {
-        fprintf(stderr, "cd: no $HOME variable set\n");
-        return;
+        fprintf(stderr, "Usage: setenv variable value\n");
+        return 0;
     }
 
-    if (chdir(dir) != 0)
-    {
-        perror("cd");
-    }
-    else
-    {
-        /* Update the PWD environment variable*/
-        char cwd[BUFFER_SIZE];
-        if (getcwd(cwd, sizeof(cwd)) != NULL)
-        {
-            setenv("PWD", cwd, 1);
-        }
-        else
-        {
-            perror("getcwd");
-        }
-    }
-}
-
-void handle_setenv(char **args)
-{
-    char *name = args[1];
-    char *value = args[2];
-
-    if (name == NULL || value == NULL)
-    {
-        fprintf(stderr, "Usage: setenv VARIABLE VALUE\n");
-        return;
-    }
-
-    if (setenv(name, value, 1) != 0)
-    {
+    if (setenv(args[1], args[2], 1) == -1)
         perror("setenv");
-    }
+
+    return 0;
 }
 
-void handle_unsetenv(char **args)
+/**
+ * shell_unsetenv - Handle the unsetenv built-in command
+ * @args: An array of strings containing the command and arguments
+ * @envp: The array of environment variables
+ *
+ * Return: 0 to continue the shell
+ */
+int shell_unsetenv(char **args, char **envp)
 {
-    char *name = args[1];
+    (void)envp;
 
-    if (name == NULL)
+    if (args[1] == NULL)
     {
-        fprintf(stderr, "Usage: unsetenv VARIABLE\n");
-        return;
+        fprintf(stderr, "Usage: unsetenv variable\n");
+        return 0;
     }
 
-    if (unsetenv(name) != 0)
-    {
+    if (unsetenv(args[1]) == -1)
         perror("unsetenv");
-    }
+
+    return 0;
 }
 
-void handle_alias(char **args)
+/**
+ * shell_cd - Handle the cd built-in command
+ * @args: An array of strings containing the command and arguments
+ *
+ * Return: 0 to continue the shell
+ */
+int shell_cd(char **args)
 {
     if (args[1] == NULL)
     {
-        /* Print all aliases*/
-        extern char **environ;
-        char **env;
-        for (env = environ; *env != NULL; env++)
-        {
-            if (strncmp(*env, "alias ", 6) == 0)
-            {
-                printf("%s\n", *env + 6);
-            }
-        }
+        fprintf(stderr, "Usage: cd directory\n");
+        return 0;
     }
-    else
-    {
-        /* Define or update an alias*/
-        char *name = args[1];
-        char *value = args[2];
 
-        if (name == NULL)
-        {
-            fprintf(stderr, "Usage: alias [name[='value'] ...]\n");
-            return;
-        }
+    if (chdir(args[1]) == -1)
+        perror("cd");
 
-        /* If there's no value provided, print the alias*/
-        if (value == NULL)
-        {
-            extern char **environ;
-            char **env;
-            for (env = environ; *env != NULL; env++)
-            {
-                if (strncmp(*env, "alias ", 6) == 0 && strncmp(*env + 6, name, strlen(name)) == 0)
-                {
-                    printf("%s\n", *env + 6);
-                    break;
-                }
-            }
-        }
-        else
-        {
-            char *alias = malloc(strlen(name) + strlen(value) + 8);
-            if (alias == NULL)
-            {
-                perror("malloc");
-                return;
-            }
-            sprintf(alias, "alias %s='%s'", name, value);
-            putenv(alias); /* Add the alias to the environment*/
-        }
-    }
+    return 0;
 }

@@ -15,16 +15,19 @@
 
 /* Function prototypes */
 void prompt(void);
-char *read_command(void);
-char **parse_command(char *command);
-int execute_command(char **args);
-int check_builtin(char **args);
+char *read_line(void);
+char **parse_line(char *line);
+int execute_command(char **args, char **envp);
+int check_builtin(char **args, char **envp);
 void handle_error(char *command, int status);
-void handle_exit(char **args);
-void handle_env(void);
-void handle_cd(char **args);
-void handle_setenv(char **args);
-void handle_unsetenv(char **args);
-void handle_alias(char **args);
+int count_tokens(char *line, char *delimiters);
+char **split_tokens(char *line, char *delimiters);
+
+/* Builtin command prototypes */
+int shell_exit(char **args);
+int shell_env(char **envp);
+int shell_setenv(char **args, char **envp);
+int shell_unsetenv(char **args, char **envp);
+int shell_cd(char **args);
 
 #endif /* SHELL_H */
